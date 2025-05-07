@@ -15,6 +15,7 @@ const salesRoutes = require('./routes/sales');
 const printRoutes = require('./routes/print');
 const reportsRoutes = require('./routes/reports');
 const financeRoutes = require('./routes/finance');
+const taxRoutes = require('./routes/tax');
 
 // Initialize express app
 const app = express();
@@ -33,6 +34,7 @@ app.use('/api/sales', salesRoutes);
 app.use('/api/print', printRoutes);
 app.use('/api/reports', reportsRoutes);
 app.use('/api/finance', financeRoutes);
+app.use('/api/tax', taxRoutes);
 
 // Base route
 app.get('/', (req, res) => {
