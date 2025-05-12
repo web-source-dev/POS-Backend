@@ -25,6 +25,14 @@ const inventorySchema = new mongoose.Schema({
     type: String,
     trim: true
   },
+  subcategory2: {
+    type: String,
+    trim: true
+  },
+  categoryPath: {
+    type: String,
+    trim: true
+  },
   brand: {
     type: String,
     trim: true
@@ -121,7 +129,7 @@ inventorySchema.virtual('inventoryValue').get(function() {
   return this.stock * this.price;
 });
 
-// Pre-save hook to update status based on stock level
+// Pre-save hook to update status based on stock level and generate categoryPath
 inventorySchema.pre('save', function(next) {
   if (this.isModified('stock')) {
     if (this.stock <= 0) {
@@ -132,6 +140,12 @@ inventorySchema.pre('save', function(next) {
       this.status = 'In Stock';
     }
   }
+  
+  // Generate the categoryPath string
+  const pathParts = [this.category];
+  if (this.subcategory) pathParts.push(this.subcategory);
+  if (this.subcategory2) pathParts.push(this.subcategory2);
+  this.categoryPath = pathParts.join(' > ');
   
   this.updatedAt = Date.now();
   next();

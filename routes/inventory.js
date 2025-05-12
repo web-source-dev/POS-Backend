@@ -40,7 +40,7 @@ const upload = multer({
 // Get all inventory items (with optional filters)
 router.get('/', verifyToken, async (req, res) => {
   try {
-    const { category, search, status, supplier, subcategory, brand } = req.query;
+    const { category, search, status, supplier, subcategory, subcategory2, brand } = req.query;
     const userId = req.user.id;
     
     // Build query based on filters
@@ -52,6 +52,10 @@ router.get('/', verifyToken, async (req, res) => {
     
     if (subcategory) {
       query.subcategory = subcategory;
+    }
+    
+    if (subcategory2) {
+      query.subcategory2 = subcategory2;
     }
     
     if (brand) {
@@ -72,6 +76,9 @@ router.get('/', verifyToken, async (req, res) => {
         { sku: { $regex: search, $options: 'i' } },
         { barcode: { $regex: search, $options: 'i' } },
         { category: { $regex: search, $options: 'i' } },
+        { subcategory: { $regex: search, $options: 'i' } },
+        { subcategory2: { $regex: search, $options: 'i' } },
+        { categoryPath: { $regex: search, $options: 'i' } },
         { brand: { $regex: search, $options: 'i' } },
         { supplier: { $regex: search, $options: 'i' } },
         { location: { $regex: search, $options: 'i' } }
@@ -137,7 +144,7 @@ router.post('/', verifyToken, async (req, res) => {
   try {
     const { 
       name, sku, category, price, stock, description, reorderLevel,
-      barcode, subcategory, brand, supplier, purchasePrice, location, 
+      barcode, subcategory, subcategory2, brand, supplier, purchasePrice, location, 
       imageUrl, expiryDate, unitOfMeasure, weight, dimensions, tags, taxRate
     } = req.body;
     
@@ -164,6 +171,7 @@ router.post('/', verifyToken, async (req, res) => {
       // New fields
       barcode,
       subcategory,
+      subcategory2,
       brand,
       supplier,
       purchasePrice,
@@ -190,7 +198,7 @@ router.put('/:id', verifyToken, async (req, res) => {
   try {
     const { 
       name, sku, category, price, stock, description, reorderLevel,
-      barcode, subcategory, brand, supplier, purchasePrice, location, 
+      barcode, subcategory, subcategory2, brand, supplier, purchasePrice, location, 
       imageUrl, expiryDate, unitOfMeasure, weight, dimensions, tags, taxRate
     } = req.body;
     
@@ -229,6 +237,7 @@ router.put('/:id', verifyToken, async (req, res) => {
     // Update new fields
     if (barcode !== undefined) item.barcode = barcode;
     if (subcategory !== undefined) item.subcategory = subcategory;
+    if (subcategory2 !== undefined) item.subcategory2 = subcategory2;
     if (brand !== undefined) item.brand = brand;
     if (supplier !== undefined) item.supplier = supplier;
     if (purchasePrice !== undefined) item.purchasePrice = purchasePrice;
@@ -306,16 +315,54 @@ router.get('/brands/list', verifyToken, async (req, res) => {
   }
 });
 
-// Get subcategories list
+// Get inventory subcategories list
 router.get('/subcategories/list', verifyToken, async (req, res) => {
   try {
-    const subcategories = await Inventory.distinct('subcategory', { 
+    const { category } = req.query;
+    let query = { 
       userId: req.user.id,
       subcategory: { $ne: null, $ne: "" }
-    });
+    };
+    
+    // If category is provided, filter subcategories by parent category
+    if (category) {
+      query.category = category;
+    }
+    
+    const subcategories = await Inventory.distinct('subcategory', query);
     
     res.json(subcategories);
   } catch (error) {
+    res.status(500).json({ message: 'Server error', error: error.message });
+  }
+});
+
+// Get subcategory2 list
+router.get('/subcategories2/list', verifyToken, async (req, res) => {
+  try {
+    const { category, subcategory } = req.query;
+    console.log('Fetching subcategory2 values:', { category, subcategory, userId: req.user.id });
+    
+    let query = { 
+      userId: req.user.id,
+      subcategory2: { $ne: null, $ne: "" }
+    };
+    
+    // Filter by parent categories if provided
+    if (category) {
+      query.category = category;
+    }
+    
+    if (subcategory) {
+      query.subcategory = subcategory;
+    }
+    
+    const subcategories2 = await Inventory.distinct('subcategory2', query);
+    console.log('Found subcategory2 values:', subcategories2);
+    
+    res.json(subcategories2);
+  } catch (error) {
+    console.error('Error fetching subcategory2 values:', error);
     res.status(500).json({ message: 'Server error', error: error.message });
   }
 });
