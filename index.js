@@ -18,6 +18,7 @@ const financeRoutes = require('./routes/finance');
 const taxRoutes = require('./routes/tax');
 const dashboardRoutes = require('./routes/dashboardroutes');
 const summaryRoutes = require('./routes/summary');
+const todayRoutes = require('./routes/today');
 
 // Initialize express app
 const app = express();
@@ -41,6 +42,7 @@ app.use('/api/finance', financeRoutes);
 app.use('/api/tax', taxRoutes);
 app.use('/api/dashboard', dashboardRoutes);
 app.use('/api/summary', summaryRoutes);
+app.use('/api/today', todayRoutes);
 
 // Base route
 app.get('/', (req, res) => {
