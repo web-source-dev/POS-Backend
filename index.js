@@ -48,6 +48,9 @@ app.use('/api/today', todayRoutes);
 app.get('/', (req, res) => {
   res.send('POS API is running');
 });
+app.get('/api/status', (req, res) => {
+  res.json({ timestamp: new Date(), message: "Server is alive!" });
+});
 
 // Connect to MongoDB
 const MONGODB_URI = process.env.MONGODB_URI || 'mongodb://localhost:27017/pos_system';
