@@ -26,6 +26,11 @@ const saleItemSchema = new mongoose.Schema({
 });
 
 const salesSchema = new mongoose.Schema({
+  receiptNumber: {
+    type: Number,
+    required: true,
+    default: 1
+  },
   items: [saleItemSchema],
   subtotal: {
     type: Number,
@@ -64,8 +69,18 @@ const salesSchema = new mongoose.Schema({
   date: {
     type: Date,
     default: Date.now
+  },
+  printed: {
+    type: Boolean,
+    default: false
   }
 });
+
+// Static method to get the next receipt number
+salesSchema.statics.getNextReceiptNumber = async function() {
+  const lastSale = await this.findOne().sort({ receiptNumber: -1 });
+  return lastSale ? lastSale.receiptNumber + 1 : 1;
+};
 
 const Sales = mongoose.model('Sales', salesSchema);
 

@@ -1,358 +1,495 @@
 const express = require('express');
 const router = express.Router();
-const Inventory = require('../models/Inventory');
+const { verifyToken, isAdmin } = require('../middleware/auth');
 const Sales = require('../models/Sales');
-const { verifyToken } = require('../middleware/auth');
+const Inventory = require('../models/Inventory');
+const CashDrawer = require('../models/CashDrawer');
+const Expense = require('../models/Expense');
+const Supplier = require('../models/Supplier');
+const mongoose = require('mongoose');
 
-/**
- * @route   GET /api/reports/sales
- * @desc    Get sales data for reports
- * @access  Private
- */
+// Helper function to parse date range
+const parseDateRange = (req) => {
+  const { startDate, endDate } = req.query;
+  const query = {};
+  
+  if (startDate && endDate) {
+    query.date = {
+      $gte: new Date(startDate),
+      $lte: new Date(`${endDate}T23:59:59.999Z`)
+    };
+  }
+  
+  return query;
+};
+
+// Helper to group data by time interval
+const groupByTimeInterval = (data, interval) => {
+  // Implementation depends on specific requirements
+  return data;
+};
+
+// Get Sales Report
 router.get('/sales', verifyToken, async (req, res) => {
   try {
-    const { timeframe, startDate, endDate } = req.query;
-    const userId = req.user.id;
+    const dateQuery = parseDateRange(req);
     
-    let start, end;
+    // Add user filtering
+    dateQuery.userId = req.user.id;
     
-    // Set date range based on timeframe
-    if (startDate && endDate) {
-      start = new Date(startDate);
-      end = new Date(endDate);
-    } else {
-      end = new Date();
-      
-      switch (timeframe) {
-        case 'daily':
-          // Last 7 days
-          start = new Date(end);
-          start.setDate(end.getDate() - 7);
-          break;
-        case 'weekly':
-          // Last 4 weeks
-          start = new Date(end);
-          start.setDate(end.getDate() - 28);
-          break;
-        case 'monthly':
-          // Last 6 months
-          start = new Date(end);
-          start.setMonth(end.getMonth() - 6);
-          break;
-        case 'yearly':
-          // Last year
-          start = new Date(end);
-          start.setFullYear(end.getFullYear() - 1);
-          break;
-        default:
-          // Default to last 30 days
-          start = new Date(end);
-          start.setDate(end.getDate() - 30);
+    const sales = await Sales.find(dateQuery)
+      .sort({ date: -1 });
+    
+    const totalSales = sales.reduce((sum, sale) => sum + sale.total, 0);
+    const totalItems = sales.reduce((sum, sale) => {
+      return sum + sale.items.reduce((itemSum, item) => itemSum + item.quantity, 0);
+    }, 0);
+    
+    res.json({
+      success: true,
+      data: sales,
+      summary: {
+        totalSales: totalSales.toFixed(2),
+        totalTransactions: sales.length,
+        totalItems,
+        averageTransaction: sales.length ? (totalSales / sales.length).toFixed(2) : 0
       }
-    }
+    });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
+
+// Get Sales by Category
+router.get('/sales/category', verifyToken, async (req, res) => {
+  try {
+    const dateQuery = parseDateRange(req);
+    dateQuery.userId = req.user.id;
     
-    // Find all sales within date range
-    const sales = await Sales.find({
-      userId,
-      date: { $gte: start, $lte: end }
-    }).sort({ date: 1 });
+    const sales = await Sales.find(dateQuery);
     
-    // Group sales data by date for chart
-    const groupedData = {};
+    // Create a map to aggregate sales by category
+    const categoryMap = {};
     let totalSales = 0;
-    let totalProfit = 0;
-    let totalTransactions = 0;
-    let totalItems = 0;
     
+    // First collect all item IDs to fetch inventory items in bulk
+    const itemIds = [];
     sales.forEach(sale => {
-      // Format date based on timeframe
-      let dateKey;
-      
-      if (timeframe === 'yearly') {
-        dateKey = new Date(sale.date).toLocaleString('default', { month: 'short' });
-      } else {
-        dateKey = new Date(sale.date).toLocaleDateString();
+      sale.items.forEach(item => {
+        itemIds.push(item.itemId);
+      });
+    });
+    
+    // Fetch inventory items in one query
+    const inventoryItems = await Inventory.find({ _id: { $in: itemIds } });
+    const inventoryMap = {};
+    inventoryItems.forEach(item => {
+      inventoryMap[item._id.toString()] = item;
+    });
+    
+    // Now process sales with inventory data
+    sales.forEach(sale => {
+      sale.items.forEach(item => {
+        const inventoryItem = inventoryMap[item.itemId.toString()];
+        const category = inventoryItem ? inventoryItem.category : 'Uncategorized';
+        const amount = item.price * item.quantity;
+        
+        if (!categoryMap[category]) {
+          categoryMap[category] = 0;
+        }
+        
+        categoryMap[category] += amount;
+        totalSales += amount;
+      });
+    });
+    
+    // Convert map to array and add percentage
+    const categories = Object.keys(categoryMap).map(category => ({
+      category,
+      sales: categoryMap[category].toFixed(2),
+      percentage: (categoryMap[category] / totalSales * 100).toFixed(2)
+    }));
+    
+    // Sort by sales amount descending
+    categories.sort((a, b) => b.sales - a.sales);
+    
+    res.json({
+      success: true,
+      data: categories,
+      summary: {
+        totalSales: totalSales.toFixed(2),
+        categoryCount: categories.length
       }
+    });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
+
+// Get Sales Trends
+router.get('/sales/trends', verifyToken, async (req, res) => {
+  try {
+    const dateQuery = parseDateRange(req);
+    const interval = req.query.interval || 'day';
+    dateQuery.userId = req.user.id;
+    
+    const sales = await Sales.find(dateQuery)
+      .sort({ date: 1 });
+    
+    // Group by specified interval (day, week, month)
+    const trends = groupByTimeInterval(sales, interval);
+    
+    res.json({
+      success: true,
+      data: trends
+    });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
+
+// Get Inventory Report
+router.get('/inventory', verifyToken, async (req, res) => {
+  try {
+    const inventory = await Inventory.find({ userId: req.user.id })
+      .sort({ name: 1 });
+    
+    const totalItems = inventory.length;
+    const totalValue = inventory.reduce((sum, item) => sum + (item.stock * item.price), 0);
+    const lowStockItems = inventory.filter(item => item.status === 'Low Stock').length;
+    const outOfStockItems = inventory.filter(item => item.status === 'Out of Stock').length;
+    
+    res.json({
+      success: true,
+      data: inventory,
+      summary: {
+        totalItems,
+        totalValue: totalValue.toFixed(2),
+        lowStockItems,
+        outOfStockItems
+      }
+    });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
+
+// Get Low Stock Items
+router.get('/inventory/low-stock', verifyToken, async (req, res) => {
+  try {
+    const lowStockItems = await Inventory.find({
+      userId: req.user.id,
+      $or: [{ status: 'Low Stock' }, { status: 'Out of Stock' }]
+    }).sort({ stock: 1 });
+    
+    res.json({
+      success: true,
+      data: lowStockItems,
+      summary: {
+        lowStockCount: lowStockItems.filter(item => item.status === 'Low Stock').length,
+        outOfStockCount: lowStockItems.filter(item => item.status === 'Out of Stock').length,
+        totalCount: lowStockItems.length
+      }
+    });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
+
+// Get Inventory by Category
+router.get('/inventory/category', verifyToken, async (req, res) => {
+  try {
+    const inventory = await Inventory.find({ userId: req.user.id });
+    
+    // Aggregate inventory by category
+    const categoryMap = {};
+    let totalValue = 0;
+    
+    inventory.forEach(item => {
+      const category = item.category;
+      const value = item.stock * item.price;
       
-      if (!groupedData[dateKey]) {
-        groupedData[dateKey] = {
-          sales: 0,
-          profit: 0,
-          transactions: 0
+      if (!categoryMap[category]) {
+        categoryMap[category] = {
+          count: 0,
+          value: 0
         };
       }
       
-      // Calculate approximate profit (30% of sales as a placeholder)
-      // In a real system, you would calculate based on cost vs. sale price
-      const saleProfit = sale.total * 0.3;
-      
-      // Update daily data
-      groupedData[dateKey].sales += sale.total;
-      groupedData[dateKey].profit += saleProfit;
-      groupedData[dateKey].transactions += 1;
-      
-      // Update totals
-      totalSales += sale.total;
-      totalProfit += saleProfit;
-      totalTransactions += 1;
-      
-      // Count items
-      totalItems += sale.items.reduce((sum, item) => sum + item.quantity, 0);
+      categoryMap[category].count += 1;
+      categoryMap[category].value += value;
+      totalValue += value;
     });
     
-    // Convert to array format for chart
-    const chartData = Object.keys(groupedData).map(date => ({
-      name: date,
-      sales: Math.round(groupedData[date].sales * 100) / 100,
-      profit: Math.round(groupedData[date].profit * 100) / 100,
-      transactions: groupedData[date].transactions
+    // Convert map to array and add percentage
+    const categories = Object.keys(categoryMap).map(category => ({
+      category,
+      count: categoryMap[category].count,
+      value: categoryMap[category].value.toFixed(2),
+      percentage: (categoryMap[category].value / totalValue * 100).toFixed(2)
     }));
     
-    // Calculate averages
-    const averageSale = totalTransactions > 0 ? totalSales / totalTransactions : 0;
-    const profitMargin = totalSales > 0 ? (totalProfit / totalSales) * 100 : 0;
+    // Sort by value descending
+    categories.sort((a, b) => b.value - a.value);
     
     res.json({
-      chartData,
+      success: true,
+      data: categories,
       summary: {
-        totalSales,
-        averageSale,
-        totalTransactions,
-        profitMargin
+        totalValue: totalValue.toFixed(2),
+        categoryCount: categories.length
       }
     });
   } catch (error) {
-    console.error('Error fetching sales report data:', error);
-    res.status(500).json({ message: 'Server error', error: error.message });
+    res.status(500).json({ success: false, message: error.message });
   }
 });
 
-/**
- * @route   GET /api/reports/inventory-value
- * @desc    Get inventory value trend
- * @access  Private
- */
-router.get('/inventory-value', verifyToken, async (req, res) => {
+// Get Financial Summary
+router.get('/financial/summary', verifyToken, async (req, res) => {
   try {
-    const userId = req.user.id;
+    const dateQuery = parseDateRange(req);
+    dateQuery.userId = req.user.id;
     
-    // For a real system, you would track inventory value history in a separate collection
-    // For this implementation, we'll return current value and simulate past values
+    // Get sales data
+    const sales = await Sales.find(dateQuery);
+    const totalRevenue = sales.reduce((sum, sale) => sum + sale.total, 0);
     
-    // Get current inventory value
-    const items = await Inventory.find({ userId });
-    const currentValue = items.reduce((sum, item) => sum + (item.price * item.stock), 0);
+    // Get expense data
+    const expenses = await Expense.find(dateQuery);
+    const totalExpenses = expenses.reduce((sum, expense) => sum + expense.amount, 0);
     
-    // Generate simulated historical data (in a real system, this would come from a database)
-    const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
-    const currentMonth = new Date().getMonth();
+    // Calculate profit
+    const profit = totalRevenue - totalExpenses;
+    const profitMargin = totalRevenue > 0 ? (profit / totalRevenue * 100) : 0;
     
-    // Create data for the last 6 months
-    const chartData = [];
-    for (let i = 5; i >= 0; i--) {
-      const monthIndex = (currentMonth - i + 12) % 12;
-      
-      // Simulate some variation in inventory value (±10% from current)
-      const variation = 0.9 + (Math.random() * 0.2);
-      const value = i === 0 
-        ? currentValue 
-        : Math.round(currentValue * (0.85 + (i * 0.03)) * variation);
-      
-      chartData.push({
-        name: months[monthIndex],
-        value
-      });
-    }
+    // Get cash drawer data
+    const cashDrawer = await CashDrawer.find(dateQuery)
+      .sort({ date: -1 })
+      .limit(1);
     
-    res.json({ chartData });
+    const currentBalance = cashDrawer.length > 0 ? cashDrawer[0].balance : 0;
+    
+    res.json({
+      success: true,
+      data: {
+        revenue: totalRevenue.toFixed(2),
+        expenses: totalExpenses.toFixed(2),
+        profit: profit.toFixed(2),
+        profitMargin: profitMargin.toFixed(2),
+        currentBalance: currentBalance.toFixed(2)
+      }
+    });
   } catch (error) {
-    console.error('Error fetching inventory value data:', error);
-    res.status(500).json({ message: 'Server error', error: error.message });
+    res.status(500).json({ success: false, message: error.message });
   }
 });
 
-/**
- * @route   GET /api/reports/categories
- * @desc    Get sales by category
- * @access  Private
- */
-router.get('/categories', verifyToken, async (req, res) => {
+// Get Expenses by Category
+router.get('/expenses/category', verifyToken, async (req, res) => {
   try {
-    const userId = req.user.id;
-    const { timeframe } = req.query;
+    const dateQuery = parseDateRange(req);
+    dateQuery.userId = req.user.id;
     
-    // Set date range based on timeframe
-    const end = new Date();
-    let start;
+    const expenses = await Expense.find(dateQuery);
     
-    switch (timeframe) {
-      case 'daily':
-        // Last 7 days
-        start = new Date(end);
-        start.setDate(end.getDate() - 7);
-        break;
-      case 'weekly':
-        // Last 4 weeks
-        start = new Date(end);
-        start.setDate(end.getDate() - 28);
-        break;
-      case 'monthly':
-        // Last 6 months
-        start = new Date(end);
-        start.setMonth(end.getMonth() - 6);
-        break;
-      case 'yearly':
-        // Last year
-        start = new Date(end);
-        start.setFullYear(end.getFullYear() - 1);
-        break;
-      default:
-        // Default to last 30 days
-        start = new Date(end);
-        start.setDate(end.getDate() - 30);
-    }
+    // Aggregate expenses by category
+    const categoryMap = {};
+    let totalExpenses = 0;
     
-    // Find all sales within date range
-    const sales = await Sales.find({
-      userId,
-      date: { $gte: start, $lte: end }
+    expenses.forEach(expense => {
+      const category = expense.category;
+      const amount = expense.amount;
+      
+      if (!categoryMap[category]) {
+        categoryMap[category] = 0;
+      }
+      
+      categoryMap[category] += amount;
+      totalExpenses += amount;
     });
     
-    // We need to fetch all inventory items to get their categories
-    const inventoryItems = await Inventory.find({ userId });
-    const itemCategories = {};
-    
-    // Create a lookup of item id to category
-    inventoryItems.forEach(item => {
-      itemCategories[item._id.toString()] = item.category;
-    });
-    
-    // Group sales by category
-    const categorySales = {};
-    let totalSales = 0;
-    
-    sales.forEach(sale => {
-      sale.items.forEach(item => {
-        const itemId = item.itemId.toString();
-        const category = itemCategories[itemId] || 'Uncategorized';
-        const itemTotal = item.price * item.quantity;
-        
-        if (!categorySales[category]) {
-          categorySales[category] = 0;
-        }
-        
-        categorySales[category] += itemTotal;
-        totalSales += itemTotal;
-      });
-    });
-    
-    // Convert to array format for chart and calculate percentages
-    const chartData = Object.keys(categorySales).map(category => ({
-      name: category,
-      value: Math.round((categorySales[category] / totalSales) * 100)
+    // Convert map to array and add percentage
+    const categories = Object.keys(categoryMap).map(category => ({
+      category,
+      amount: categoryMap[category].toFixed(2),
+      percentage: (categoryMap[category] / totalExpenses * 100).toFixed(2)
     }));
     
-    // Sort by value (highest first)
-    chartData.sort((a, b) => b.value - a.value);
+    // Sort by amount descending
+    categories.sort((a, b) => b.amount - a.amount);
     
-    // Limit to top 5 categories + "Other"
-    if (chartData.length > 6) {
-      const topCategories = chartData.slice(0, 5);
-      const otherValue = chartData.slice(5).reduce((sum, item) => sum + item.value, 0);
-      topCategories.push({ name: 'Other', value: otherValue });
-      res.json({ chartData: topCategories });
-    } else {
-      res.json({ chartData });
-    }
+    res.json({
+      success: true,
+      data: categories,
+      summary: {
+        totalExpenses: totalExpenses.toFixed(2),
+        categoryCount: categories.length
+      }
+    });
   } catch (error) {
-    console.error('Error fetching category data:', error);
-    res.status(500).json({ message: 'Server error', error: error.message });
+    res.status(500).json({ success: false, message: error.message });
   }
 });
 
-/**
- * @route   GET /api/reports/top-selling
- * @desc    Get top selling items
- * @access  Private
- */
-router.get('/top-selling', verifyToken, async (req, res) => {
+// Get Supplier Report
+router.get('/suppliers', verifyToken, async (req, res) => {
   try {
-    const userId = req.user.id;
-    const { timeframe = 'monthly', limit = 5 } = req.query;
+    const suppliers = await Supplier.find();
     
-    // Set date range based on timeframe
-    const end = new Date();
-    let start;
-    
-    switch (timeframe) {
-      case 'daily':
-        // Last day
-        start = new Date(end);
-        start.setHours(0, 0, 0, 0);
-        break;
-      case 'weekly':
-        // Last 7 days
-        start = new Date(end);
-        start.setDate(end.getDate() - 7);
-        break;
-      case 'monthly':
-        // Last 30 days
-        start = new Date(end);
-        start.setDate(end.getDate() - 30);
-        break;
-      case 'yearly':
-        // Last 365 days
-        start = new Date(end);
-        start.setFullYear(end.getFullYear() - 1);
-        break;
-      default:
-        // Default to last 30 days
-        start = new Date(end);
-        start.setDate(end.getDate() - 30);
-    }
-    
-    // Find all sales within date range
-    const sales = await Sales.find({
-      userId,
-      date: { $gte: start, $lte: end }
-    }).populate('items.itemId', 'name sku');
-    
-    // Aggregate item sales
-    const itemSales = {};
-    
-    sales.forEach(sale => {
-      sale.items.forEach(item => {
-        const itemId = item.itemId ? item.itemId._id.toString() : item.itemId;
-        const name = item.itemId ? item.itemId.name : item.name;
-        const sku = item.itemId ? item.itemId.sku : item.sku;
-        
-        if (!itemId) return;
-        
-        if (!itemSales[itemId]) {
-          itemSales[itemId] = {
-            _id: itemId,
-            name,
-            sku,
-            sold: 0,
-            revenue: 0
-          };
-        }
-        
-        itemSales[itemId].sold += item.quantity;
-        itemSales[itemId].revenue += item.price * item.quantity;
-      });
+    // Get all inventory items related to suppliers in one query
+    const inventory = await Inventory.find({ 
+      supplier: { $in: suppliers.map(s => s._id) } 
     });
     
-    // Convert to array and sort by revenue
-    let topItems = Object.values(itemSales)
-      .sort((a, b) => b.revenue - a.revenue)
-      .slice(0, parseInt(limit));
+    // Create a map for quick lookup
+    const inventoryBySupplier = {};
+    inventory.forEach(item => {
+      const supplierId = item.supplier.toString();
+      if (!inventoryBySupplier[supplierId]) {
+        inventoryBySupplier[supplierId] = [];
+      }
+      inventoryBySupplier[supplierId].push(item);
+    });
     
-    res.json(topItems);
+    // Process supplier data with inventory details
+    const supplierData = suppliers.map(supplier => {
+      const supplierItems = inventoryBySupplier[supplier._id.toString()] || [];
+      
+      const totalItems = supplierItems.length;
+      const totalValue = supplierItems.reduce((sum, item) => 
+        sum + (item.stock * (item.purchasePrice || item.price)), 0);
+      
+      return {
+        _id: supplier._id,
+        name: supplier.name,
+        contact: supplier.contact,
+        email: supplier.email,
+        phone: supplier.phone,
+        status: supplier.status,
+        totalItems,
+        totalValue: totalValue.toFixed(2),
+        lastOrder: supplier.lastOrder
+      };
+    });
+    
+    res.json({
+      success: true,
+      data: supplierData
+    });
   } catch (error) {
-    console.error('Error fetching top selling items:', error);
-    res.status(500).json({ message: 'Server error', error: error.message });
+    res.status(500).json({ success: false, message: error.message });
   }
 });
 
-module.exports = router; 
+// Get Cash Drawer Transactions
+router.get('/cash-drawer', verifyToken, async (req, res) => {
+  try {
+    const dateQuery = parseDateRange(req);
+    dateQuery.userId = req.user.id;
+    
+    const cashDrawerTransactions = await CashDrawer.find(dateQuery)
+      .sort({ date: -1 });
+    
+    // Calculate period opening and closing balances
+    let openingBalance = 0;
+    let closingBalance = 0;
+    
+    if (cashDrawerTransactions.length > 0) {
+      // Find the first balance before the period
+      const previousTransaction = await CashDrawer.findOne({
+        userId: req.user.id,
+        date: { $lt: new Date(req.query.startDate) }
+      }).sort({ date: -1 });
+      
+      openingBalance = previousTransaction ? previousTransaction.balance : 0;
+      closingBalance = cashDrawerTransactions[0].balance;
+    }
+    
+    // Calculate total sales, expenses, and net change
+    const totalSales = cashDrawerTransactions
+      .filter(transaction => transaction.operation === 'sale')
+      .reduce((sum, transaction) => sum + transaction.amount, 0);
+      
+    const totalExpenses = cashDrawerTransactions
+      .filter(transaction => transaction.operation === 'expense')
+      .reduce((sum, transaction) => sum + transaction.amount, 0);
+      
+    const netChange = openingBalance - closingBalance;
+    
+    res.json({
+      success: true,
+      data: cashDrawerTransactions,
+      summary: {
+        openingBalance,
+        closingBalance,
+        totalSales,
+        totalExpenses,
+        netChange
+      }
+    });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
+
+// Get Expense Transactions
+router.get('/expenses/transactions', verifyToken, async (req, res) => {
+  try {
+    const dateQuery = parseDateRange(req);
+    dateQuery.userId = req.user.id;
+    
+    const expenses = await Expense.find(dateQuery)
+      .sort({ date: -1 });
+    
+    // Calculate total by category and payment method
+    const categoryTotals = {};
+    const paymentMethodTotals = {};
+    let totalAmount = 0;
+    
+    expenses.forEach(expense => {
+      // Aggregate by category
+      if (!categoryTotals[expense.category]) {
+        categoryTotals[expense.category] = 0;
+      }
+      categoryTotals[expense.category] += expense.amount;
+      
+      // Aggregate by payment method
+      if (!paymentMethodTotals[expense.paymentMethod]) {
+        paymentMethodTotals[expense.paymentMethod] = 0;
+      }
+      paymentMethodTotals[expense.paymentMethod] += expense.amount;
+      
+      // Track total
+      totalAmount += expense.amount;
+    });
+    
+    // Calculate percentage for each category
+    const categorySummary = Object.keys(categoryTotals).map(category => ({
+      category,
+      amount: categoryTotals[category],
+      percentage: (categoryTotals[category] / totalAmount * 100).toFixed(2)
+    }));
+    
+    // Calculate percentage for each payment method
+    const paymentMethodSummary = Object.keys(paymentMethodTotals).map(method => ({
+      method,
+      amount: paymentMethodTotals[method],
+      percentage: (paymentMethodTotals[method] / totalAmount * 100).toFixed(2)
+    }));
+    
+    res.json({
+      success: true,
+      data: expenses,
+      summary: {
+        totalAmount,
+        categorySummary,
+        paymentMethodSummary
+      }
+    });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
+
+module.exports = router;

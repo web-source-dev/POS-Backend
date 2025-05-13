@@ -12,14 +12,8 @@ const settingsSchema = new mongoose.Schema({
   },
   pos: {
     receiptHeader: { type: String, default: '' },
-    receiptFooter: { type: String, default: '' }
-  },
-  hardware: {
-    printer: {
-      model: { type: String, default: '' },
-      connectionType: { type: String, default: 'usb' },
-      enabled: { type: Boolean, default: true }
-    }
+    receiptFooter: { type: String, default: '' },
+    logo: { type: String, default: '' },
   },
   // Store which organization/store these settings belong to if multi-tenant system
   organizationId: { 

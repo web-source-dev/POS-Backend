@@ -40,10 +40,26 @@ const cashDrawerSchema = new mongoose.Schema({
   }
 });
 
-// Define indexes directly on the schema instead of manipulating them later
-// This is the recommended approach
-cashDrawerSchema.index({ date: -1 });
+// Define indexes for efficient querying
 cashDrawerSchema.index({ userId: 1, date: -1 }, { background: true });
+cashDrawerSchema.index({ date: -1 });
+cashDrawerSchema.index({ userId: 1, operation: 1 });
+
+// Pre-save hook to ensure balance is calculated correctly
+cashDrawerSchema.pre('save', function(next) {
+  // For safety, ensure balance is always calculated based on previousBalance and amount
+  if (this.operation === 'add' || this.operation === 'sale' || this.operation === 'initialization') {
+    // For operations that add money, add the amount to previous balance
+    this.balance = this.previousBalance + this.amount;
+  } else if (this.operation === 'remove' || this.operation === 'expense') {
+    // For operations that remove money, subtract the amount from previous balance
+    this.balance = this.previousBalance - this.amount;
+  } else if (this.operation === 'count') {
+    // For count operations, balance is directly set to amount (count result)
+    this.balance = this.amount;
+  }
+  next();
+});
 
 const CashDrawer = mongoose.model('CashDrawer', cashDrawerSchema);
 

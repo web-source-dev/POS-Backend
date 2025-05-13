@@ -12,10 +12,6 @@ const inventorySchema = new mongoose.Schema({
     unique: true,
     trim: true
   },
-  barcode: {
-    type: String,
-    trim: true
-  },
   category: {
     type: String,
     required: true,
@@ -38,8 +34,8 @@ const inventorySchema = new mongoose.Schema({
     trim: true
   },
   supplier: {
-    type: String,
-    trim: true
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Supplier',
   },
   price: {
     type: Number,
@@ -85,14 +81,9 @@ const inventorySchema = new mongoose.Schema({
     default: 'each',
     trim: true
   },
-  weight: {
-    type: Number,
-    min: 0
-  },
-  dimensions: {
-    length: { type: Number, min: 0 },
-    width: { type: Number, min: 0 },
-    height: { type: Number, min: 0 }
+  measureValue: {
+    type: String,
+    trim: true
   },
   tags: [{
     type: String,

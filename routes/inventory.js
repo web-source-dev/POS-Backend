@@ -74,18 +74,18 @@ router.get('/', verifyToken, async (req, res) => {
       query.$or = [
         { name: { $regex: search, $options: 'i' } },
         { sku: { $regex: search, $options: 'i' } },
-        { barcode: { $regex: search, $options: 'i' } },
         { category: { $regex: search, $options: 'i' } },
         { subcategory: { $regex: search, $options: 'i' } },
         { subcategory2: { $regex: search, $options: 'i' } },
         { categoryPath: { $regex: search, $options: 'i' } },
         { brand: { $regex: search, $options: 'i' } },
-        { supplier: { $regex: search, $options: 'i' } },
         { location: { $regex: search, $options: 'i' } }
       ];
     }
     
-    const items = await Inventory.find(query).sort({ createdAt: -1 });
+    const items = await Inventory.find(query)
+      .populate('supplier', 'name contact email phone')
+      .sort({ createdAt: -1 });
     
     res.json(items);
   } catch (error) {
@@ -99,7 +99,7 @@ router.get('/:id', verifyToken, async (req, res) => {
     const item = await Inventory.findOne({
       _id: req.params.id,
       userId: req.user.id
-    });
+    }).populate('supplier', 'name contact email phone');
     
     if (!item) {
       return res.status(404).json({ message: 'Item not found' });
@@ -144,8 +144,8 @@ router.post('/', verifyToken, async (req, res) => {
   try {
     const { 
       name, sku, category, price, stock, description, reorderLevel,
-      barcode, subcategory, subcategory2, brand, supplier, purchasePrice, location, 
-      imageUrl, expiryDate, unitOfMeasure, weight, dimensions, tags, taxRate
+      subcategory, subcategory2, brand, supplier, purchasePrice, location, 
+      imageUrl, expiryDate, unitOfMeasure, measureValue, tags, taxRate
     } = req.body;
     
     // Check if item with SKU already exists for this user
@@ -169,7 +169,6 @@ router.post('/', verifyToken, async (req, res) => {
       userId: req.user.id,
       reorderLevel: reorderLevel || 5,
       // New fields
-      barcode,
       subcategory,
       subcategory2,
       brand,
@@ -179,13 +178,21 @@ router.post('/', verifyToken, async (req, res) => {
       imageUrl,
       expiryDate: expiryDate ? new Date(expiryDate) : undefined,
       unitOfMeasure,
-      weight,
-      dimensions,
+      measureValue,
       tags,
       taxRate
     });
     
     await newItem.save();
+
+    // Update the supplier's totalOrders and lastOrder
+    if (supplier) {
+      const Supplier = require('../models/Supplier');
+      await Supplier.findByIdAndUpdate(supplier, {
+        $inc: { totalOrders: 1 },
+        lastOrder: Date.now()
+      });
+    }
     
     res.status(201).json(newItem);
   } catch (error) {
@@ -198,8 +205,8 @@ router.put('/:id', verifyToken, async (req, res) => {
   try {
     const { 
       name, sku, category, price, stock, description, reorderLevel,
-      barcode, subcategory, subcategory2, brand, supplier, purchasePrice, location, 
-      imageUrl, expiryDate, unitOfMeasure, weight, dimensions, tags, taxRate
+      subcategory, subcategory2, brand, supplier, purchasePrice, location, 
+      imageUrl, expiryDate, unitOfMeasure, measureValue, tags, taxRate
     } = req.body;
     
     // Check if item exists and belongs to user
@@ -235,7 +242,6 @@ router.put('/:id', verifyToken, async (req, res) => {
     item.reorderLevel = reorderLevel || item.reorderLevel;
     
     // Update new fields
-    if (barcode !== undefined) item.barcode = barcode;
     if (subcategory !== undefined) item.subcategory = subcategory;
     if (subcategory2 !== undefined) item.subcategory2 = subcategory2;
     if (brand !== undefined) item.brand = brand;
@@ -245,8 +251,7 @@ router.put('/:id', verifyToken, async (req, res) => {
     if (imageUrl !== undefined) item.imageUrl = imageUrl;
     if (expiryDate !== undefined) item.expiryDate = new Date(expiryDate);
     if (unitOfMeasure !== undefined) item.unitOfMeasure = unitOfMeasure;
-    if (weight !== undefined) item.weight = weight;
-    if (dimensions !== undefined) item.dimensions = dimensions;
+    if (measureValue !== undefined) item.measureValue = measureValue;
     if (tags !== undefined) item.tags = tags;
     if (taxRate !== undefined) item.taxRate = taxRate;
     
@@ -290,10 +295,11 @@ router.get('/categories/list', verifyToken, async (req, res) => {
 // Get suppliers list
 router.get('/suppliers/list', verifyToken, async (req, res) => {
   try {
-    const suppliers = await Inventory.distinct('supplier', { 
-      userId: req.user.id,
-      supplier: { $ne: null, $ne: "" }
-    });
+    // Import the Supplier model
+    const Supplier = require('../models/Supplier');
+    
+    // Get all suppliers
+    const suppliers = await Supplier.find({}, 'name _id');
     
     res.json(suppliers);
   } catch (error) {
@@ -399,6 +405,63 @@ router.get('/stats/summary', verifyToken, async (req, res) => {
       potentialProfit
     });
   } catch (error) {
+    res.status(500).json({ message: 'Server error', error: error.message });
+  }
+});
+
+// Get sales history for a specific inventory item
+router.get('/:id/sales', verifyToken, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { startDate, endDate, customer } = req.query;
+    const userId = req.user.id;
+    
+    // Import the Sales model
+    const Sales = require('../models/Sales');
+    
+    // Build the query
+    let query = {
+      userId,
+      'items.itemId': id
+    };
+    
+    // Apply date filters if provided
+    if (startDate || endDate) {
+      query.date = {};
+      if (startDate) {
+        query.date.$gte = new Date(startDate);
+      }
+      if (endDate) {
+        query.date.$lte = new Date(endDate);
+      }
+    }
+    
+    // Find all sales that include this item
+    const salesData = await Sales.find(query).sort({ date: -1 });
+    
+    // Extract the relevant item data from each sale
+    const salesHistory = salesData.map(sale => {
+      // Find this specific item in the sale's items array
+      const item = sale.items.find(item => item.itemId.toString() === id);
+      
+      // Only include sales where customer matches filter (if provided)
+      if (customer && !sale.customerName.toLowerCase().includes(customer.toLowerCase())) {
+        return null;
+      }
+      
+      return {
+        _id: sale._id,
+        date: sale.date,
+        customerName: sale.customerName || 'Walk-in Customer',
+        quantity: item.quantity,
+        price: item.price,
+        total: item.quantity * item.price
+      };
+    }).filter(item => item !== null); // Remove null entries (filtered out by customer name)
+    
+    res.json(salesHistory);
+  } catch (error) {
+    console.error('Error fetching sales history:', error);
     res.status(500).json({ message: 'Server error', error: error.message });
   }
 });

@@ -64,8 +64,12 @@ router.post('/complete', verifyToken, async (req, res) => {
       });
     }
 
+    // Get next receipt number
+    const receiptNumber = await Sales.getNextReceiptNumber();
+
     // Create sales record
     const sale = new Sales({
+      receiptNumber,
       items: saleItems,
       subtotal,
       discount: discount || 0,
@@ -98,12 +102,22 @@ router.post('/complete', verifyToken, async (req, res) => {
       notes: `Sale completed for ${customerName || 'customer'}`
     });
 
+    // Format sale items to match the expected structure in the frontend
+    const formattedItems = saleItems.map(item => ({
+      id: item.itemId.toString(),
+      name: item.name,
+      quantity: item.quantity,
+      price: item.price,
+      sku: item.sku || ''
+    }));
+
     // Return the sale confirmation and updated inventory
     res.status(200).json({
       message: 'Sale completed successfully',
       saleDetails: {
         id: sale._id,
-        items,
+        receiptNumber,
+        items: formattedItems,
         total,
         discount,
         cashAmount,
@@ -121,6 +135,32 @@ router.post('/complete', verifyToken, async (req, res) => {
     });
   } catch (error) {
     console.error('Error completing sale:', error);
+    res.status(500).json({ message: 'Server error', error: error.message });
+  }
+});
+
+/**
+ * @route   PATCH /api/sales/:id/printed
+ * @desc    Mark a sale as printed
+ * @access  Private
+ */
+router.patch('/:id/printed', verifyToken, async (req, res) => {
+  try {
+    const sale = await Sales.findOne({
+      _id: req.params.id,
+      userId: req.user.id
+    });
+    
+    if (!sale) {
+      return res.status(404).json({ message: 'Sale not found' });
+    }
+    
+    sale.printed = true;
+    await sale.save();
+    
+    res.json({ message: 'Sale marked as printed', sale });
+  } catch (error) {
+    console.error('Error updating sale print status:', error);
     res.status(500).json({ message: 'Server error', error: error.message });
   }
 });
