@@ -27,6 +27,11 @@ const saleItemSchema = new mongoose.Schema({
 
 const salesSchema = new mongoose.Schema({
   receiptNumber: {
+    type: String,
+    required: true,
+    default: '#000001'
+  },
+  receiptNumberValue: {
     type: Number,
     required: true,
     default: 1
@@ -76,10 +81,20 @@ const salesSchema = new mongoose.Schema({
   }
 });
 
-// Static method to get the next receipt number
-salesSchema.statics.getNextReceiptNumber = async function() {
-  const lastSale = await this.findOne().sort({ receiptNumber: -1 });
-  return lastSale ? lastSale.receiptNumber + 1 : 1;
+// Static method to get the next receipt number for a specific user
+salesSchema.statics.getNextReceiptNumber = async function(userId) {
+  if (!userId) {
+    throw new Error('User ID is required to generate receipt number');
+  }
+  
+  const lastSale = await this.findOne({ userId: userId }).sort({ receiptNumberValue: -1 });
+  const nextNumberValue = lastSale ? lastSale.receiptNumberValue + 1 : 1;
+  const formattedNumber = `#${String(nextNumberValue).padStart(6, '0')}`;
+  
+  return {
+    receiptNumber: formattedNumber,
+    receiptNumberValue: nextNumberValue
+  };
 };
 
 const Sales = mongoose.model('Sales', salesSchema);

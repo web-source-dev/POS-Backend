@@ -152,24 +152,25 @@ router.get('/export', verifyToken, async (req, res) => {
     }).sort({ date: -1 });
 
     // Format for CSV
-    let csvContent = 'Type,Time,Reference,Amount,Details\n';
+    let csvContent = 'Type,Time,Reference,Amount ($),Details\n';
     
     // Add sales
     sales.forEach(sale => {
       const time = new Date(sale.date).toLocaleTimeString();
-      const details = `Receipt #${sale.receiptNumber}, Items: ${sale.items.length}, Customer: ${sale.customerName || 'N/A'}`;
-      csvContent += `Sale,${time},${sale._id},${sale.total},${details}\n`;
+      const details = `Items: ${sale.items.length}, Customer: ${sale.customerName || 'N/A'}`;
+      csvContent += `Sale,${time},${sale.receiptNumber},${sale.total.toFixed(2)},${details}\n`;
       
       // Add sale items as separate entries
       sale.items.forEach(item => {
-        csvContent += `SaleItem,${time},${sale._id},${item.price * item.quantity},${item.name} x ${item.quantity}\n`;
+        const itemTotal = (item.price * item.quantity).toFixed(2);
+        csvContent += `SaleItem,${time},${sale.receiptNumber},${itemTotal},${item.name} x ${item.quantity} @ $${item.price.toFixed(2)}\n`;
       });
     });
     
     // Add expenses
     expenses.forEach(expense => {
       const time = new Date(expense.date).toLocaleTimeString();
-      csvContent += `Expense,${time},${expense.expenseId},${expense.amount},${expense.category}: ${expense.description}\n`;
+      csvContent += `Expense,${time},${expense.expenseId},${expense.amount.toFixed(2)},${expense.category}: ${expense.description}\n`;
     });
 
     // Set headers for file download

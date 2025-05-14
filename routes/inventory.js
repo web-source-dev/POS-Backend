@@ -4,6 +4,7 @@ const { verifyToken, isAdmin } = require('../middleware/auth');
 const multer = require('multer');
 const path = require('path');
 const fs = require('fs');
+const mongoose = require('mongoose');
 
 const router = express.Router();
 
@@ -34,6 +35,35 @@ const upload = multer({
   fileFilter: fileFilter,
   limits: {
     fileSize: 5 * 1024 * 1024 // 5MB file size limit
+  }
+});
+
+// Configure multer for CSV file uploads
+const csvStorage = multer.diskStorage({
+  destination: function(req, file, cb) {
+    cb(null, 'uploads/csv/');
+  },
+  filename: function(req, file, cb) {
+    const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
+    const ext = path.extname(file.originalname);
+    cb(null, 'inventory-bulk-' + uniqueSuffix + ext);
+  }
+});
+
+// Filter function to allow only CSV files
+const csvFileFilter = (req, file, cb) => {
+  if (file.mimetype === 'text/csv' || file.originalname.endsWith('.csv')) {
+    cb(null, true);
+  } else {
+    cb(new Error('Invalid file type. Only CSV files are allowed.'), false);
+  }
+};
+
+const uploadCsv = multer({ 
+  storage: csvStorage, 
+  fileFilter: csvFileFilter,
+  limits: {
+    fileSize: 10 * 1024 * 1024 // 10MB file size limit
   }
 });
 
@@ -455,13 +485,155 @@ router.get('/:id/sales', verifyToken, async (req, res) => {
         customerName: sale.customerName || 'Walk-in Customer',
         quantity: item.quantity,
         price: item.price,
-        total: item.quantity * item.price
+        total: item.quantity * item.price,
+        receiptNumber: sale.receiptNumber
       };
     }).filter(item => item !== null); // Remove null entries (filtered out by customer name)
     
     res.json(salesHistory);
   } catch (error) {
     console.error('Error fetching sales history:', error);
+    res.status(500).json({ message: 'Server error', error: error.message });
+  }
+});
+
+// Get inventory template for bulk upload
+router.get('/bulk-upload/template', verifyToken, (req, res) => {
+  try {
+    // Define CSV headers based on inventory model
+    const headers = [
+      'name', 'sku', 'category', 'subcategory', 'subcategory2', 'brand', 
+      'price', 'purchasePrice', 'stock', 'description', 'reorderLevel', 'location',
+      'expiryDate', 'unitOfMeasure', 'measureValue', 'tags', 'taxRate'
+    ];
+    
+    // Create CSV content with headers and example items
+    const exampleItems = [
+      'Example Item 1,SKU001,Category1,Subcategory1,Subcategory2,Brand1,10.00,5.00,100,Description1,5,Location1,2023-12-31,each,1,tag1,0',
+      'Example Item 2,SKU002,Category2,Subcategory1,Subcategory2,Brand2,20.00,10.00,200,Description2,5,Location2,2024-01-31,each,1,tag2,0',
+      'Example Item 3,SKU003,Category3,Subcategory1,Subcategory2,Brand3,30.00,15.00,300,Description3,5,Location3,2024-02-28,each,1,tag3,0'
+    ];
+    
+    const csvContent = headers.join(',') + '\n' + exampleItems.join('\n') + '\n';
+    
+    // Set headers for CSV download
+    res.setHeader('Content-Type', 'text/csv');
+    res.setHeader('Content-Disposition', 'attachment; filename="inventory_template.csv"');
+    
+    // Send the CSV content
+    res.send(csvContent);
+  } catch (error) {
+    res.status(500).json({ message: 'Server error', error: error.message });
+  }
+});
+
+// Bulk upload inventory items
+router.post('/bulk-upload', verifyToken, uploadCsv.single('file'), async (req, res) => {
+  try {
+    if (!req.file) {
+      return res.status(400).json({ message: 'No CSV file uploaded' });
+    }
+    
+    // Read the uploaded CSV file
+    const fs = require('fs');
+    const csv = require('csv-parser');
+    const results = [];
+    const errors = [];
+    let successCount = 0;
+    
+    // Create a readable stream from the uploaded file
+    const stream = fs.createReadStream(req.file.path)
+      .pipe(csv())
+      .on('data', (data) => results.push(data))
+      .on('end', async () => {
+        // Process each row in the CSV
+        for (let i = 0; i < results.length; i++) {
+          try {
+            const row = results[i];
+            
+            // Check required fields
+            if (!row.name || !row.sku || !row.category || !row.price) {
+              errors.push({
+                row: i + 1,
+                sku: row.sku || 'N/A',
+                error: 'Missing required fields (name, sku, category, or price)'
+              });
+              continue;
+            }
+            
+            // Check if item with SKU already exists
+            const existingItem = await Inventory.findOne({ 
+              sku: row.sku, 
+              userId: req.user.id 
+            });
+            
+            if (existingItem) {
+              errors.push({
+                row: i + 1,
+                sku: row.sku,
+                error: 'Item with this SKU already exists'
+              });
+              continue;
+            }
+            
+            // Prepare the inventory item data
+            const itemData = {
+              name: row.name,
+              sku: row.sku,
+              category: row.category,
+              subcategory: row.subcategory || '',
+              subcategory2: row.subcategory2 || '',
+              brand: row.brand || '',
+              supplier: row.supplier ? new mongoose.Types.ObjectId(row.supplier) : null,
+              price: parseFloat(row.price) || 0,
+              purchasePrice: parseFloat(row.purchasePrice) || 0,
+              stock: parseInt(row.stock) || 0,
+              description: row.description || '',
+              reorderLevel: parseInt(row.reorderLevel) || 5,
+              location: row.location || '',
+              expiryDate: row.expiryDate ? new Date(row.expiryDate) : null,
+              unitOfMeasure: row.unitOfMeasure || 'each',
+              measureValue: row.measureValue || '',
+              tags: row.tags ? row.tags.split(',').map(tag => tag.trim()) : [],
+              taxRate: parseFloat(row.taxRate) || 0,
+              userId: req.user.id
+            };
+            
+            // Create the inventory item
+            const newItem = new Inventory(itemData);
+            await newItem.save();
+            successCount++;
+          } catch (err) {
+            errors.push({
+              row: i + 1,
+              sku: results[i].sku || 'N/A',
+              error: err.message
+            });
+          }
+        }
+        
+        // Delete the uploaded file
+        fs.unlink(req.file.path, (err) => {
+          if (err) console.error('Error deleting file:', err);
+        });
+        
+        // Return the result
+        res.json({
+          message: 'Bulk upload completed',
+          totalRows: results.length,
+          successCount,
+          errorCount: errors.length,
+          errors
+        });
+      });
+  } catch (error) {
+    // Delete uploaded file in case of error
+    if (req.file) {
+      fs.unlink(req.file.path, (err) => {
+        if (err) console.error('Error deleting file:', err);
+      });
+    }
+    
     res.status(500).json({ message: 'Server error', error: error.message });
   }
 });

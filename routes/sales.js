@@ -64,12 +64,13 @@ router.post('/complete', verifyToken, async (req, res) => {
       });
     }
 
-    // Get next receipt number
-    const receiptNumber = await Sales.getNextReceiptNumber();
+    // Get next receipt number - updated to use userId for user-specific receipt numbering
+    const { receiptNumber, receiptNumberValue } = await Sales.getNextReceiptNumber(userId);
 
     // Create sales record
     const sale = new Sales({
       receiptNumber,
+      receiptNumberValue,
       items: saleItems,
       subtotal,
       discount: discount || 0,
@@ -116,7 +117,7 @@ router.post('/complete', verifyToken, async (req, res) => {
       message: 'Sale completed successfully',
       saleDetails: {
         id: sale._id,
-        receiptNumber,
+        receiptNumber: sale.receiptNumber,
         items: formattedItems,
         total,
         discount,
