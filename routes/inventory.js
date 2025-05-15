@@ -73,6 +73,11 @@ router.get('/', verifyToken, async (req, res) => {
     const { category, search, status, supplier, subcategory, subcategory2, brand, vehicleName } = req.query;
     const userId = req.user.id;
     
+    // Pagination parameters
+    const page = parseInt(req.query.page) || 1;
+    const limit = parseInt(req.query.limit) || 20;
+    const skip = (page - 1) * limit;
+    
     // Build query based on filters
     let query = { userId };
     
@@ -118,11 +123,26 @@ router.get('/', verifyToken, async (req, res) => {
       ];
     }
     
+    // Get total count for pagination metadata
+    const totalItems = await Inventory.countDocuments(query);
+    
+    // Get paginated results
     const items = await Inventory.find(query)
       .populate('supplier', 'name contact email phone')
-      .sort({ createdAt: -1 });
+      .sort({ createdAt: -1 })
+      .skip(skip)
+      .limit(limit);
     
-    res.json(items);
+    // Return with pagination metadata
+    res.json({
+      items,
+      pagination: {
+        page,
+        limit,
+        totalItems,
+        totalPages: Math.ceil(totalItems / limit)
+      }
+    });
   } catch (error) {
     res.status(500).json({ message: 'Server error', error: error.message });
   }
