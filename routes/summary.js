@@ -116,16 +116,35 @@ router.get('/inventory-performance', verifyToken, async (req, res) => {
     // Sort by sales quantity
     performanceData.sort((a, b) => b.salesQuantity - a.salesQuantity);
     
-    // Calculate percentiles
-    const topPercentile = Math.ceil(totalItems * 0.25);
-    const mediumPercentile = Math.ceil(totalItems * 0.5);
-    const lowPercentile = Math.ceil(totalItems * 0.75);
+    // Check if all items have zero sales
+    const noSalesExist = performanceData.every(item => item.salesQuantity === 0);
     
-    // Categorize items
-    const mostSelling = performanceData.slice(0, topPercentile);
-    const mediumSelling = performanceData.slice(topPercentile, mediumPercentile);
-    const lowSelling = performanceData.slice(mediumPercentile, lowPercentile);
-    const notSelling = performanceData.slice(lowPercentile);
+    let mostSelling = [];
+    let mediumSelling = [];
+    let lowSelling = [];
+    let notSelling = [];
+    
+    if (noSalesExist) {
+      // If no sales exist, put all items in notSelling category
+      console.log('No sales data found. All items categorized as not selling.');
+      notSelling = performanceData;
+    } else {
+      // Calculate percentiles
+      const topPercentile = Math.ceil(totalItems * 0.25);
+      const mediumPercentile = Math.ceil(totalItems * 0.5);
+      const lowPercentile = Math.ceil(totalItems * 0.75);
+      
+      // Categorize items
+      mostSelling = performanceData.filter(item => item.salesQuantity > 0).slice(0, topPercentile);
+      mediumSelling = performanceData.slice(topPercentile, mediumPercentile).filter(item => item.salesQuantity > 0);
+      lowSelling = performanceData.slice(mediumPercentile, lowPercentile).filter(item => item.salesQuantity > 0);
+      
+      // All items with zero sales go to notSelling category
+      notSelling = [
+        ...performanceData.filter(item => item.salesQuantity === 0),
+        ...performanceData.slice(lowPercentile).filter(item => item.salesQuantity > 0)
+      ];
+    }
     
     // Calculate summary metrics
     const totalRevenue = performanceData.reduce((sum, item) => sum + item.revenue, 0);
