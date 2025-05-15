@@ -5,6 +5,92 @@ const Sales = require('../models/Sales');
 const CashDrawer = require('../models/CashDrawer');
 const { verifyToken } = require('../middleware/auth');
 
+
+
+
+
+// Get all inventory items (with optional filters)
+router.get('/inventory', verifyToken, async (req, res) => {
+  try {
+    const { category, search, status, supplier, subcategory, subcategory2, brand, vehicleName } = req.query;
+    const userId = req.user.id;
+    
+    // Pagination parameters
+    const page = parseInt(req.query.page) || 1;
+    const limit = parseInt(req.query.limit) || 20;
+    const skip = (page - 1) * limit;
+    
+    // Build query based on filters
+    let query = { userId };
+    
+    if (category) {
+      query.category = category;
+    }
+    
+    if (subcategory) {
+      query.subcategory = subcategory;
+    }
+    
+    if (subcategory2) {
+      query.subcategory2 = subcategory2;
+    }
+    
+    if (brand) {
+      query.brand = brand;
+    }
+    
+    if (vehicleName) {
+      query.vehicleName = vehicleName;
+    }
+    
+    if (supplier) {
+      query.supplier = supplier;
+    }
+    
+    if (status) {
+      query.status = status;
+    }
+    
+    if (search) {
+      query.$or = [
+        { name: { $regex: search, $options: 'i' } },
+        { sku: { $regex: search, $options: 'i' } },
+        { category: { $regex: search, $options: 'i' } },
+        { subcategory: { $regex: search, $options: 'i' } },
+        { subcategory2: { $regex: search, $options: 'i' } },
+        { categoryPath: { $regex: search, $options: 'i' } },
+        { brand: { $regex: search, $options: 'i' } },
+        { location: { $regex: search, $options: 'i' } },
+        { vehicleName: { $regex: search, $options: 'i' } }
+      ];
+    }
+    
+    // Get total count for pagination metadata
+    const totalItems = await Inventory.countDocuments(query);
+    
+    // Get paginated results
+    const items = await Inventory.find(query)
+      .populate('supplier', 'name contact email phone')
+      .sort({ createdAt: -1 })
+      .skip(skip)
+      .limit(limit);
+    
+    // Return with pagination metadata
+    res.json({
+      items,
+      pagination: {
+        page,
+        limit,
+        totalItems,
+        totalPages: Math.ceil(totalItems / limit)
+      }
+    });
+  } catch (error) {
+    res.status(500).json({ message: 'Server error', error: error.message });
+  }
+});
+
+
 /**
  * @route   POST /api/sales/complete
  * @desc    Complete a sale and update inventory
