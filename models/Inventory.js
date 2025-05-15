@@ -33,6 +33,10 @@ const inventorySchema = new mongoose.Schema({
     type: String,
     trim: true
   },
+  vehicleName: {
+    type: String,
+    trim: true
+  },
   supplier: {
     type: mongoose.Schema.Types.ObjectId,
     ref: 'Supplier',

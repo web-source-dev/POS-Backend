@@ -569,4 +569,121 @@ router.get('/expenses-by-category', verifyToken, async (req, res) => {
   }
 });
 
+/**
+ * Get sales summary for a period
+ */
+router.get('/sales-summary', verifyToken, async (req, res) => {
+  try {
+    const userId = req.user.id;
+    const userObjectId = toObjectId(userId);
+    const days = parseInt(req.query.days) || 30;
+    
+    // Calculate the start date
+    const now = new Date();
+    const startDate = new Date();
+    startDate.setDate(now.getDate() - days);
+    
+    console.log(`Fetching sales summary for userId: ${userId}, days: ${days}, startDate: ${startDate.toISOString()}`);
+    
+    // Aggregate sales for the period
+    const salesSummary = await Sales.aggregate([
+      { 
+        $match: { 
+          userId: userObjectId, 
+          date: { $gte: startDate, $lte: now } 
+        } 
+      },
+      { 
+        $group: { 
+          _id: null, 
+          total: { $sum: "$total" }, 
+          count: { $sum: 1 } 
+        } 
+      }
+    ]);
+    
+    // Return the summary or empty object if no sales
+    res.json(salesSummary.length > 0 ? salesSummary[0] : { total: 0, count: 0 });
+  } catch (error) {
+    console.error('Error fetching sales summary:', error);
+    res.status(500).json({ message: 'Error fetching sales summary', error: error.message });
+  }
+});
+
+/**
+ * Get expenses summary for a period
+ */
+router.get('/expenses-summary', verifyToken, async (req, res) => {
+  try {
+    const userId = req.user.id;
+    const userObjectId = toObjectId(userId);
+    const days = parseInt(req.query.days) || 30;
+    
+    // Calculate the start date
+    const now = new Date();
+    const startDate = new Date();
+    startDate.setDate(now.getDate() - days);
+    
+    console.log(`Fetching expenses summary for userId: ${userId}, days: ${days}, startDate: ${startDate.toISOString()}`);
+    
+    // Aggregate expenses for the period
+    const expensesSummary = await Expense.aggregate([
+      { 
+        $match: { 
+          userId: userObjectId, 
+          date: { $gte: startDate, $lte: now } 
+        } 
+      },
+      { 
+        $group: { 
+          _id: null, 
+          total: { $sum: "$amount" }, 
+          count: { $sum: 1 } 
+        } 
+      }
+    ]);
+    
+    // Return the summary or empty object if no expenses
+    res.json(expensesSummary.length > 0 ? expensesSummary[0] : { total: 0, count: 0 });
+  } catch (error) {
+    console.error('Error fetching expenses summary:', error);
+    res.status(500).json({ message: 'Error fetching expenses summary', error: error.message });
+  }
+});
+
+/**
+ * Get net purchase amount for inventory
+ */
+router.get('/net-purchase-amount', verifyToken, async (req, res) => {
+  try {
+    const userId = req.user.id;
+    const userObjectId = toObjectId(userId);
+    
+    console.log(`Fetching net purchase amount for userId: ${userId}`);
+    
+    // Calculate the total purchase value for all inventory items
+    // This assumes you have a field called purchasePrice in your Inventory model
+    const netPurchase = await Inventory.aggregate([
+      { 
+        $match: { 
+          userId: userObjectId 
+        } 
+      },
+      { 
+        $group: { 
+          _id: null, 
+          total: { $sum: { $multiply: ["$purchasePrice", "$stock"] } },
+          count: { $sum: 1 }
+        } 
+      }
+    ]);
+    
+    // Return the summary or empty object if no inventory
+    res.json(netPurchase.length > 0 ? netPurchase[0] : { total: 0, count: 0 });
+  } catch (error) {
+    console.error('Error fetching net purchase amount:', error);
+    res.status(500).json({ message: 'Error fetching net purchase amount', error: error.message });
+  }
+});
+
 module.exports = router;

@@ -70,7 +70,7 @@ const uploadCsv = multer({
 // Get all inventory items (with optional filters)
 router.get('/', verifyToken, async (req, res) => {
   try {
-    const { category, search, status, supplier, subcategory, subcategory2, brand } = req.query;
+    const { category, search, status, supplier, subcategory, subcategory2, brand, vehicleName } = req.query;
     const userId = req.user.id;
     
     // Build query based on filters
@@ -92,6 +92,10 @@ router.get('/', verifyToken, async (req, res) => {
       query.brand = brand;
     }
     
+    if (vehicleName) {
+      query.vehicleName = vehicleName;
+    }
+    
     if (supplier) {
       query.supplier = supplier;
     }
@@ -109,7 +113,8 @@ router.get('/', verifyToken, async (req, res) => {
         { subcategory2: { $regex: search, $options: 'i' } },
         { categoryPath: { $regex: search, $options: 'i' } },
         { brand: { $regex: search, $options: 'i' } },
-        { location: { $regex: search, $options: 'i' } }
+        { location: { $regex: search, $options: 'i' } },
+        { vehicleName: { $regex: search, $options: 'i' } }
       ];
     }
     
@@ -175,8 +180,11 @@ router.post('/', verifyToken, async (req, res) => {
     const { 
       name, sku, category, price, stock, description, reorderLevel,
       subcategory, subcategory2, brand, supplier, purchasePrice, location, 
-      imageUrl, expiryDate, unitOfMeasure, measureValue, tags, taxRate
+      imageUrl, expiryDate, unitOfMeasure, measureValue, tags, taxRate, vehicleName
     } = req.body;
+
+    console.log(req.body);
+
     
     // Check if item with SKU already exists for this user
     const existingItem = await Inventory.findOne({ 
@@ -202,7 +210,7 @@ router.post('/', verifyToken, async (req, res) => {
       subcategory,
       subcategory2,
       brand,
-      supplier,
+      supplier: supplier && supplier !== "" ? supplier : null,
       purchasePrice,
       location,
       imageUrl,
@@ -210,13 +218,14 @@ router.post('/', verifyToken, async (req, res) => {
       unitOfMeasure,
       measureValue,
       tags,
-      taxRate
+      taxRate,
+      vehicleName
     });
     
     await newItem.save();
 
     // Update the supplier's totalOrders and lastOrder
-    if (supplier) {
+    if (supplier && supplier !== "" && supplier !== "null") {
       const Supplier = require('../models/Supplier');
       await Supplier.findByIdAndUpdate(supplier, {
         $inc: { totalOrders: 1 },
@@ -226,6 +235,7 @@ router.post('/', verifyToken, async (req, res) => {
     
     res.status(201).json(newItem);
   } catch (error) {
+    console.log(error);
     res.status(500).json({ message: 'Server error', error: error.message });
   }
 });
@@ -236,7 +246,7 @@ router.put('/:id', verifyToken, async (req, res) => {
     const { 
       name, sku, category, price, stock, description, reorderLevel,
       subcategory, subcategory2, brand, supplier, purchasePrice, location, 
-      imageUrl, expiryDate, unitOfMeasure, measureValue, tags, taxRate
+      imageUrl, expiryDate, unitOfMeasure, measureValue, tags, taxRate, vehicleName
     } = req.body;
     
     // Check if item exists and belongs to user
@@ -275,7 +285,7 @@ router.put('/:id', verifyToken, async (req, res) => {
     if (subcategory !== undefined) item.subcategory = subcategory;
     if (subcategory2 !== undefined) item.subcategory2 = subcategory2;
     if (brand !== undefined) item.brand = brand;
-    if (supplier !== undefined) item.supplier = supplier;
+    if (supplier !== undefined) item.supplier = supplier && supplier !== "" ? supplier : null;
     if (purchasePrice !== undefined) item.purchasePrice = purchasePrice;
     if (location !== undefined) item.location = location;
     if (imageUrl !== undefined) item.imageUrl = imageUrl;
@@ -284,6 +294,7 @@ router.put('/:id', verifyToken, async (req, res) => {
     if (measureValue !== undefined) item.measureValue = measureValue;
     if (tags !== undefined) item.tags = tags;
     if (taxRate !== undefined) item.taxRate = taxRate;
+    if (vehicleName !== undefined) item.vehicleName = vehicleName;
     
     await item.save();
     
@@ -325,14 +336,56 @@ router.get('/categories/list', verifyToken, async (req, res) => {
 // Get suppliers list
 router.get('/suppliers/list', verifyToken, async (req, res) => {
   try {
-    // Import the Supplier model
-    const Supplier = require('../models/Supplier');
+    const { category, subcategory, brand } = req.query;
     
-    // Get all suppliers
-    const suppliers = await Supplier.find({}, 'name _id');
-    
-    res.json(suppliers);
+    // If category filter is provided, find suppliers that have items in that category
+    if (category || subcategory || brand) {
+      // Build query for inventory items
+      let itemQuery = { 
+        userId: req.user.id,
+        supplier: { $ne: null, $ne: "" }
+      };
+      
+      if (category) {
+        itemQuery.category = category;
+      }
+      
+      if (subcategory) {
+        itemQuery.subcategory = subcategory;
+      }
+      
+      if (brand) {
+        itemQuery.brand = brand;
+      }
+      
+      // Find unique supplier IDs from inventory items
+      const supplierIds = await Inventory.distinct('supplier', itemQuery);
+      
+      // Some suppliers might be stored as strings and some as ObjectIds
+      // Build a query that handles both cases
+      const stringIds = supplierIds.filter(id => typeof id === 'string');
+      const objectIds = supplierIds.filter(id => typeof id !== 'string');
+      
+      // Import the Supplier model
+      const Supplier = require('../models/Supplier');
+      
+      // Find suppliers using the IDs
+      const suppliers = await Supplier.find({
+        $or: [
+          { _id: { $in: objectIds } },
+          { name: { $in: stringIds } }
+        ]
+      }, 'name _id');
+      
+      res.json(suppliers);
+    } else {
+      // No filters, just return all suppliers
+      const Supplier = require('../models/Supplier');
+      const suppliers = await Supplier.find({}, 'name _id');
+      res.json(suppliers);
+    }
   } catch (error) {
+    console.error('Error fetching suppliers:', error);
     res.status(500).json({ message: 'Server error', error: error.message });
   }
 });
@@ -340,12 +393,55 @@ router.get('/suppliers/list', verifyToken, async (req, res) => {
 // Get brands list
 router.get('/brands/list', verifyToken, async (req, res) => {
   try {
-    const brands = await Inventory.distinct('brand', { 
+    const { category, subcategory } = req.query;
+    let query = { 
       userId: req.user.id,
       brand: { $ne: null, $ne: "" }
-    });
+    };
+    
+    // Filter by category if provided
+    if (category) {
+      query.category = category;
+    }
+    
+    // Further filter by subcategory if provided
+    if (subcategory) {
+      query.subcategory = subcategory;
+    }
+    
+    const brands = await Inventory.distinct('brand', query);
     
     res.json(brands);
+  } catch (error) {
+    res.status(500).json({ message: 'Server error', error: error.message });
+  }
+});
+
+// Get vehicle names list
+router.get('/vehicles/list', verifyToken, async (req, res) => {
+  try {
+    const { category, subcategory, brand } = req.query;
+    let query = { 
+      userId: req.user.id,
+      vehicleName: { $ne: null, $ne: "" }
+    };
+    
+    // Apply filters if provided
+    if (category) {
+      query.category = category;
+    }
+    
+    if (subcategory) {
+      query.subcategory = subcategory;
+    }
+    
+    if (brand) {
+      query.brand = brand;
+    }
+    
+    const vehicleNames = await Inventory.distinct('vehicleName', query);
+    
+    res.json(vehicleNames);
   } catch (error) {
     res.status(500).json({ message: 'Server error', error: error.message });
   }
@@ -504,14 +600,14 @@ router.get('/bulk-upload/template', verifyToken, (req, res) => {
     const headers = [
       'name', 'sku', 'category', 'subcategory', 'subcategory2', 'brand', 
       'price', 'purchasePrice', 'stock', 'description', 'reorderLevel', 'location',
-      'expiryDate', 'unitOfMeasure', 'measureValue', 'tags', 'taxRate'
+      'expiryDate', 'unitOfMeasure', 'measureValue', 'tags', 'taxRate', 'vehicleName'
     ];
     
     // Create CSV content with headers and example items
     const exampleItems = [
-      'Example Item 1,SKU001,Category1,Subcategory1,Subcategory2,Brand1,10.00,5.00,100,Description1,5,Location1,2023-12-31,each,1,tag1,0',
-      'Example Item 2,SKU002,Category2,Subcategory1,Subcategory2,Brand2,20.00,10.00,200,Description2,5,Location2,2024-01-31,each,1,tag2,0',
-      'Example Item 3,SKU003,Category3,Subcategory1,Subcategory2,Brand3,30.00,15.00,300,Description3,5,Location3,2024-02-28,each,1,tag3,0'
+      'Example Item 1,SKU001,Category1,Subcategory1,Subcategory2,Brand1,10.00,5.00,100,Description1,5,Location1,2023-12-31,each,1,tag1,0,Vehicle1',
+      'Example Item 2,SKU002,Category2,Subcategory1,Subcategory2,Brand2,20.00,10.00,200,Description2,5,Location2,2024-01-31,each,1,tag2,0,Vehicle2',
+      'Example Item 3,SKU003,Category3,Subcategory1,Subcategory2,Brand3,30.00,15.00,300,Description3,5,Location3,2024-02-28,each,1,tag3,0,Vehicle3'
     ];
     
     const csvContent = headers.join(',') + '\n' + exampleItems.join('\n') + '\n';
@@ -584,7 +680,8 @@ router.post('/bulk-upload', verifyToken, uploadCsv.single('file'), async (req, r
               subcategory: row.subcategory || '',
               subcategory2: row.subcategory2 || '',
               brand: row.brand || '',
-              supplier: row.supplier ? new mongoose.Types.ObjectId(row.supplier) : null,
+              vehicleName: row.vehicleName || '',
+              supplier: row.supplier && row.supplier.trim() !== "" ? new mongoose.Types.ObjectId(row.supplier) : null,
               price: parseFloat(row.price) || 0,
               purchasePrice: parseFloat(row.purchasePrice) || 0,
               stock: parseInt(row.stock) || 0,
